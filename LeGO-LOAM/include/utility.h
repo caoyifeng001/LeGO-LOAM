@@ -53,10 +53,10 @@ typedef pcl::PointXYZI  PointType;
 // VLP-16
 extern const int N_SCAN = 16;
 extern const int Horizon_SCAN = 1800;
-extern const float ang_res_x = 0.2;
-extern const float ang_res_y = 2.0;
-extern const float ang_bottom = 15.0+0.1;
-extern const int groundScanInd = 7;
+extern const float ang_res_x = 0.2;  //水平上每条线间隔
+extern const float ang_res_y = 2.0; //竖直方向上每条线间隔
+extern const float ang_bottom = 15.0+0.1; //竖直方向上起始角度是负角度，与水平方向相差15.1
+extern const int groundScanInd = 7;//以多少个扫描圈来表示地面
 
 // HDL-32E
 // extern const int N_SCAN = 32;
@@ -74,18 +74,18 @@ extern const int groundScanInd = 7;
 // extern const float ang_bottom = 16.6+0.1;
 // extern const int groundScanInd = 15;
 
-extern const bool loopClosureEnableFlag = false;
+extern const bool loopClosureEnableFlag = true;
 extern const double mappingProcessInterval = 0.3;
 
 extern const float scanPeriod = 0.1;
-extern const int systemDelay = 0;
-extern const int imuQueLength = 200;
+extern const int systemDelay = 0;   
+extern const int imuQueLength = 200;    
 extern const string imuTopic = "/imu/data";
 
-
+// 点云分割
 extern const float sensorMountAngle = 0.0;
-extern const float segmentTheta = 1.0472;
-extern const int segmentValidPointNum = 5;
+extern const float segmentTheta = 1.0472;//点云分割时的角度跨度上限（π/3
+extern const int segmentValidPointNum = 5;//检查上下左右连续5个点做为分割的特征依据
 extern const int segmentValidLineNum = 3;
 extern const float segmentAlphaX = ang_res_x / 180.0 * M_PI;
 extern const float segmentAlphaY = ang_res_y / 180.0 * M_PI;
@@ -119,6 +119,7 @@ struct by_value{
     }
 };
 
+// 具备姿态角的特定点
 struct PointXYZIRPYT
 {
     PCL_ADD_POINT4D

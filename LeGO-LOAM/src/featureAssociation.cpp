@@ -187,11 +187,13 @@ public:
         nh("~")
         {
 
+        //没有找到接收这四个话题的节点，可能是供可视化处理的
         subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2>("/segmented_cloud", 1, &FeatureAssociation::laserCloudHandler, this);
         subLaserCloudInfo = nh.subscribe<cloud_msgs::cloud_info>("/segmented_cloud_info", 1, &FeatureAssociation::laserCloudInfoHandler, this);
         subOutlierCloud = nh.subscribe<sensor_msgs::PointCloud2>("/outlier_cloud", 1, &FeatureAssociation::outlierCloudHandler, this);
         subImu = nh.subscribe<sensor_msgs::Imu>(imuTopic, 50, &FeatureAssociation::imuHandler, this);
 
+        //角部特征、平面特征以及里程计信息供建图时使用
         pubCornerPointsSharp = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_sharp", 1);
         pubCornerPointsLessSharp = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_less_sharp", 1);
         pubSurfPointsFlat = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_flat", 1);
@@ -220,7 +222,7 @@ public:
         surfPointsLessFlat.reset(new pcl::PointCloud<PointType>());
 
         surfPointsLessFlatScan.reset(new pcl::PointCloud<PointType>());
-        surfPointsLessFlatScanDS.reset(new pcl::PointCloud<PointType>());
+        surfPointsLessFlatScanDS.reset(new pcl::PointCloud<PointType>());  //DS 降采样
 
         timeScanCur = 0;
         timeNewSegmentedCloud = 0;
@@ -802,46 +804,6 @@ public:
 	        pubSurfPointsLessFlat.publish(laserCloudOutMsg);
 	    }
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
     void TransformToStart(PointType const * const pi, PointType * const po)
@@ -1655,7 +1617,7 @@ public:
         if (laserCloudCornerLastNum < 10 || laserCloudSurfLastNum < 100)
             return;
 
-        for (int iterCount1 = 0; iterCount1 < 25; iterCount1++) {
+        for (int iterCount1 = 0; iterCount1 < 35; iterCount1++) {
             laserCloudOri->clear();
             coeffSel->clear();
 
@@ -1667,7 +1629,7 @@ public:
                 break;
         }
 
-        for (int iterCount2 = 0; iterCount2 < 25; iterCount2++) {
+        for (int iterCount2 = 0; iterCount2 < 35; iterCount2++) {
 
             laserCloudOri->clear();
             coeffSel->clear();
@@ -1804,6 +1766,7 @@ public:
     void runFeatureAssociation()
     {
 
+        //判断分割点云和异常值的实时性
         if (newSegmentedCloud && newSegmentedCloudInfo && newOutlierCloud &&
             std::abs(timeNewSegmentedCloudInfo - timeNewSegmentedCloud) < 0.05 &&
             std::abs(timeNewOutlierCloud - timeNewSegmentedCloud) < 0.05){
@@ -1815,29 +1778,35 @@ public:
             return;
         }
 
+        //进行形状特征的调整
         adjustDistortion();
 
         calculateSmoothness();
 
         markOccludedPoints();
 
+        //提取特征
         extractFeatures();
 
         publishCloud();
 
+        //在配准之前，检验LM法是否初始化，接下来就是里程计部分
         if (!systemInitedLM) {
             checkSystemInitialization();
             return;
         }
 
+        //提供粗配准的先验以供优化
         updateInitialGuess();
 
+        //优化并发送里程计信息
         updateTransformation();
 
         integrateTransformation();
 
         publishOdometry();
 
+        //发送点云以供建图使用
         publishCloudsLast();   
     }
 };

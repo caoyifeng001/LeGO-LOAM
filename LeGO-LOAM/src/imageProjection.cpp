@@ -28,7 +28,9 @@
 
 #include "utility.h"
 
-
+// 输入是雷达数据传入的点云信息，输出的是被分割后的点云，用来匹配特征。
+// 接下来需要调用到featureAssociation.cpp中的函数，
+// 这个程序用来特征聚类从而达到里程计的作用，
 class ImageProjection{
 private:
 
@@ -45,15 +47,16 @@ private:
     ros::Publisher pubSegmentedCloudInfo;
     ros::Publisher pubOutlierCloud;
 
-    pcl::PointCloud<PointType>::Ptr laserCloudIn;
+    // 在投影过程中主要用到的点云
+    pcl::PointCloud<PointType>::Ptr laserCloudIn; //雷达直接传出的点云
 
-    pcl::PointCloud<PointType>::Ptr fullCloud;
-    pcl::PointCloud<PointType>::Ptr fullInfoCloud;
+    pcl::PointCloud<PointType>::Ptr fullCloud;  //投影后的点云
+    pcl::PointCloud<PointType>::Ptr fullInfoCloud; //整体的点云
 
-    pcl::PointCloud<PointType>::Ptr groundCloud;
-    pcl::PointCloud<PointType>::Ptr segmentedCloud;
-    pcl::PointCloud<PointType>::Ptr segmentedCloudPure;
-    pcl::PointCloud<PointType>::Ptr outlierCloud;
+    pcl::PointCloud<PointType>::Ptr groundCloud;  //地面点云
+    pcl::PointCloud<PointType>::Ptr segmentedCloud;  //分割后的部分
+    pcl::PointCloud<PointType>::Ptr segmentedCloudPure;  //分割后的部分的几何信息
+    pcl::PointCloud<PointType>::Ptr outlierCloud;  //在分割时出现的异常
 
     PointType nanPoint;
 
@@ -158,7 +161,8 @@ public:
         cloudHeader = laserCloudMsg->header;
         pcl::fromROSMsg(*laserCloudMsg, *laserCloudIn);
     }
-    
+    // 这个函数里依次调用了点云的复制、寻找始末角度、点云投影、地面检测、点云分割与发布。
+    // 其中点云的复制是将rosmsg转化为pcl点云。
     void cloudHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg){
 
         copyPointCloud(laserCloudMsg);
@@ -171,7 +175,9 @@ public:
     }
 
     void findStartEndAngle(){
+        //计算角度时以x轴负轴为基准
         segMsg.startOrientation = -atan2(laserCloudIn->points[0].y, laserCloudIn->points[0].x);
+        //因此最末角度为2π减去计算值
         segMsg.endOrientation   = -atan2(laserCloudIn->points[laserCloudIn->points.size() - 1].y,
                                                      laserCloudIn->points[laserCloudIn->points.size() - 2].x) + 2 * M_PI;
         if (segMsg.endOrientation - segMsg.startOrientation > 3 * M_PI) {
@@ -180,7 +186,7 @@ public:
             segMsg.endOrientation += 2 * M_PI;
         segMsg.orientationDiff = segMsg.endOrientation - segMsg.startOrientation;
     }
-
+    // 将点云逐一计算深度，将具有深度的点云保存至fullInfoCloud中。
     void projectPointCloud(){
         float verticalAngle, horizonAngle, range;
         size_t rowIdn, columnIdn, index, cloudSize; 
@@ -194,13 +200,17 @@ public:
             thisPoint.y = laserCloudIn->points[i].y;
             thisPoint.z = laserCloudIn->points[i].z;
 
+            //计算竖直方向上的点的角度以及在整个雷达点云中的哪一条水平线上
             verticalAngle = atan2(thisPoint.z, sqrt(thisPoint.x * thisPoint.x + thisPoint.y * thisPoint.y)) * 180 / M_PI;
             rowIdn = (verticalAngle + ang_bottom) / ang_res_y;
+            //出现异常角度则无视
             if (rowIdn < 0 || rowIdn >= N_SCAN)
                 continue;
-
+            
+            //计算水平方向上点的角度与所在线数
             horizonAngle = atan2(thisPoint.x, thisPoint.y) * 180 / M_PI;
 
+            //round是四舍五入取偶
             columnIdn = -round((horizonAngle-90.0)/ang_res_x) + Horizon_SCAN/2;
             if (columnIdn >= Horizon_SCAN)
                 columnIdn -= Horizon_SCAN;
@@ -208,7 +218,9 @@ public:
             if (columnIdn < 0 || columnIdn >= Horizon_SCAN)
                 continue;
 
+            //当前点与雷达的深度
             range = sqrt(thisPoint.x * thisPoint.x + thisPoint.y * thisPoint.y + thisPoint.z * thisPoint.z);
+            //在rangeMat矩阵中保存该点的深度，保存单通道像素值
             rangeMat.at<float>(rowIdn, columnIdn) = range;
 
             thisPoint.intensity = (float)rowIdn + (float)columnIdn / 10000.0;
@@ -220,7 +232,9 @@ public:
         }
     }
 
-
+    // 是利用不同的扫描圈来表示地面，进而检测地面是否水平。例如在源码中的七个扫描圈，
+    // 每两个圈之间进行一次比较，角度相差10°以内的我们可以看做是平地。
+    // 并且将扫描圈中的点加入到groundCloud点云。
     void groundRemoval(){
         size_t lowerInd, upperInd;
         float diffX, diffY, diffZ, angle;
@@ -243,7 +257,7 @@ public:
 
                 angle = atan2(diffZ, sqrt(diffX*diffX + diffY*diffY) ) * 180 / M_PI;
 
-                if (abs(angle - sensorMountAngle) <= 10){
+                if (abs(angle - sensorMountAngle) <= 20){
                     groundMat.at<int8_t>(i,j) = 1;
                     groundMat.at<int8_t>(i+1,j) = 1;
                 }
@@ -266,10 +280,14 @@ public:
             }
         }
     }
-
+    // 作为本程序的关键部分，首先调用了labelComponents函数，
+    // 该函数对特征的检测进行了详细的描述，并且是针对于某一特定的点与其邻点的计算过程
+    // 可以看到这是对点云分为地面点与可被匹配的四周被扫描的点，将其筛选后分别纳入被分割点云。
     void cloudSegmentation(){
+        //这是在排除地面点与异常点之后，逐一检测邻点特征并生成局部特征
         for (size_t i = 0; i < N_SCAN; ++i)
             for (size_t j = 0; j < Horizon_SCAN; ++j)
+                
                 if (labelMat.at<int>(i,j) == 0)
                     labelComponents(i, j);
 
@@ -279,7 +297,9 @@ public:
             segMsg.startRingIndex[i] = sizeOfSegCloud-1 + 5;
 
             for (size_t j = 0; j < Horizon_SCAN; ++j) {
+                //如果是被认可的特征点或者是地面点，就可以纳入被分割点云
                 if (labelMat.at<int>(i,j) > 0 || groundMat.at<int8_t>(i,j) == 1){
+                    //离群点或异常点的处理
                     if (labelMat.at<int>(i,j) == 999999){
                         if (i > groundScanInd && j % 5 == 0){
                             outlierCloud->push_back(fullCloud->points[j + i*Horizon_SCAN]);
@@ -289,12 +309,17 @@ public:
                         }
                     }
                     if (groundMat.at<int8_t>(i,j) == 1){
+                        //地面点云每隔5个点纳入被分割点云
                         if (j%5!=0 && j>5 && j<Horizon_SCAN-5)
                             continue;
                     }
+                    //是否是地面点
                     segMsg.segmentedCloudGroundFlag[sizeOfSegCloud] = (groundMat.at<int8_t>(i,j) == 1);
+                    //当前水平方向上的行数
                     segMsg.segmentedCloudColInd[sizeOfSegCloud] = j;
+                     //深度
                     segMsg.segmentedCloudRange[sizeOfSegCloud]  = rangeMat.at<float>(i,j);
+                    //把当前点纳入分割点云中
                     segmentedCloud->push_back(fullCloud->points[j + i*Horizon_SCAN]);
                     ++sizeOfSegCloud;
                 }
@@ -302,7 +327,7 @@ public:
 
             segMsg.endRingIndex[i] = sizeOfSegCloud-1 - 5;
         }
-
+        //如果在当前有节点订阅便将分割点云的几何信息也发布出去
         if (pubSegmentedCloudPure.getNumSubscribers() != 0){
             for (size_t i = 0; i < N_SCAN; ++i){
                 for (size_t j = 0; j < Horizon_SCAN; ++j){
@@ -329,7 +354,9 @@ public:
         allPushedIndX[0] = row;
         allPushedIndY[0] = col;
         int allPushedIndSize = 1;
-        
+
+        //queueSize指的是在特征处理时还未处理好的点的数量，
+        // 因此该while循环是在尝试检测该特定点的周围的点的几何特征
         while(queueSize > 0){
             fromIndX = queueIndX[queueStartInd];
             fromIndY = queueIndY[queueStartInd];
@@ -337,6 +364,7 @@ public:
             ++queueStartInd;
             labelMat.at<int>(fromIndX, fromIndY) = labelCount;
 
+            //检查上下左右四个邻点
             for (auto iter = neighborIterator.begin(); iter != neighborIterator.end(); ++iter){
 
                 thisIndX = fromIndX + (*iter).first;
@@ -352,19 +380,23 @@ public:
 
                 if (labelMat.at<int>(thisIndX, thisIndY) != 0)
                     continue;
-
+                
+                //d1与d2分别是该特定点与某邻点的深度
                 d1 = std::max(rangeMat.at<float>(fromIndX, fromIndY), 
                               rangeMat.at<float>(thisIndX, thisIndY));
                 d2 = std::min(rangeMat.at<float>(fromIndX, fromIndY), 
                               rangeMat.at<float>(thisIndX, thisIndY));
 
+                //该迭代器的first是0则是水平方向上的邻点，否则是竖直方向上的
                 if ((*iter).first == 0)
                     alpha = segmentAlphaX;
                 else
                     alpha = segmentAlphaY;
 
+                //这个angle其实是该特定点与某邻点的连线与XOZ平面的夹角，这个夹角代表了局部特征的敏感性
                 angle = atan2(d2*sin(alpha), (d1 -d2*cos(alpha)));
 
+                //如果夹角大于60°，则将这个邻点纳入到局部特征中，该邻点可以用来配准使用
                 if (angle > segmentTheta){
 
                     queueIndX[queueEndInd] = thisIndX;
@@ -384,6 +416,7 @@ public:
 
 
         bool feasibleSegment = false;
+        //当邻点数目达到30后，则该帧雷达点云的几何特征配置成功
         if (allPushedIndSize >= 30)
             feasibleSegment = true;
         else if (allPushedIndSize >= segmentValidPointNum){
@@ -404,7 +437,7 @@ public:
         }
     }
 
-    
+    // 在我们计算的过程中参考系均为机器人自身参考系，frame_id自然是base_link。
     void publishCloud(){
 
         segMsg.header = cloudHeader;

@@ -638,6 +638,7 @@ public:
     }
 
     void imuHandler(const sensor_msgs::Imu::ConstPtr& imuIn){
+        // ROS_INFO("using imu data");
         double roll, pitch, yaw;
         tf::Quaternion orientation;
         tf::quaternionMsgToTF(imuIn->orientation, orientation);
@@ -936,9 +937,13 @@ public:
                 *laserCloudSurfFromMap   += *recentOutlierCloudKeyFrames[i];
             }
 		}else{
+            // 没有回环的情况，在这里是寻找附近点之后进行降维处理，目的是让地图点云不要太过密集，
+            // 最终将合适的点云累加起来，这是一个将新点云在线调整并叠加的过程。
             surroundingKeyPoses->clear();
             surroundingKeyPosesDS->clear();
-
+            //cloudKeyPoses3D虽说是点云，但是是为了保存机器人在建图过程中的轨迹，其中的点就是定周期采样的轨迹点，这一点是在saveKeyFramesAndFactor中计算出的，在第一帧时必然是空的
+            //surroundingKeyframeSearchRadius是50米，也就是说是在当前位置进行半径查找，得到附近的轨迹点
+            //距离数据保存在pointSearchSqDis中
 			kdtreeSurroundingKeyPoses->setInputCloud(cloudKeyPoses3D);
 			kdtreeSurroundingKeyPoses->radiusSearch(currentRobotPosPoint, (double)surroundingKeyframeSearchRadius, pointSearchInd, pointSearchSqDis, 0);
 			for (int i = 0; i < pointSearchInd.size(); ++i)
@@ -1000,7 +1005,7 @@ public:
         downSizeFilterSurf.filter(*laserCloudSurfFromMapDS);
         laserCloudSurfFromMapDSNum = laserCloudSurfFromMapDS->points.size();
     }
-
+    // 将当前各类点云降采样，其中laserCloudSurfTotalLast是平面部分与异常部分的叠加。
     void downsampleCurrentScan(){
 
         laserCloudCornerLastDS->clear();
@@ -1262,7 +1267,8 @@ public:
         }
         return false;
     }
-
+    // 函数是根据现有地图与最新点云数据进行配准从而更新机器人精确位姿与融合建图，它分为角点优化、平面点优化、配准与更新等部分。
+    // 优化的过程与里程计的计算类似，是通过计算点到直线或平面的距离，构建优化公式再用LM法求解。这是角点优化cornerOptimization的函数：
     void scan2MapOptimization(){
 
         if (laserCloudCornerFromMapDSNum > 10 && laserCloudSurfFromMapDSNum > 100) {
@@ -1286,7 +1292,7 @@ public:
         }
     }
 
-
+    // 接下来的过程都是LOAM不具备的，保存轨迹与位姿图就是为了回环检测。
     void saveKeyFramesAndFactor(){
 
         currentRobotPosPoint.x = transformAftMapped[3];
@@ -1428,11 +1434,11 @@ public:
             if (timeLaserOdometry - timeLastProcessing >= mappingProcessInterval) {
 
                 timeLastProcessing = timeLaserOdometry;
-
+                // 把点云坐标均转换到世界坐标系下
                 transformAssociateToMap();
-
+                //由于帧数的频率大于建图的频率，因此需要提取关键帧进行匹配
                 extractSurroundingKeyFrames();
-
+                //降采样匹配以及增加地图点云，回环检测
                 downsampleCurrentScan();
 
                 scan2MapOptimization();
